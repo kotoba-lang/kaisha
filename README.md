@@ -61,7 +61,7 @@ clojure -M:test
 ## Scope and follow-ups
 
 v1 is the pure EDN model only. Deliberately out of scope, tracked as follow-ups
-in ADR-2607072300:
+in ADR-2607072310:
 
 - transport (kotoba-server XRPC lexicons, realtime fan-out over KSE)
 - persistence (datom projection, CRDT message bodies)
