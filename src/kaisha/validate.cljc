@@ -15,6 +15,12 @@
       (conj (problem :error :message/unknown-author (:kaisha/id msg)
                      "message author must be a member of the space"))
 
+      (and (= :private (:kaisha/visibility ch))
+           (:kaisha/author msg)
+           (not (contains? (:kaisha/members ch) (:kaisha/author msg))))
+      (conj (problem :error :message/author-not-channel-member (:kaisha/id msg)
+                     "message author must be a member of the private channel"))
+
       (nil? (:kaisha/at msg))
       (conj (problem :error :message/missing-at (:kaisha/id msg)
                      "message requires a timestamp"))

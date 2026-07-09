@@ -85,7 +85,20 @@
     (testing "private channel without members"
       (is (contains? (codes (-> (k/space "s")
                                 (k/add-channel (k/channel "c" {:kaisha/visibility :private}))))
-                     :channel/private-without-members)))))
+                     :channel/private-without-members)))
+    (testing "message author must be a member of a private channel, not just the space"
+      (let [base (-> (k/space "s")
+                     (k/add-member (k/member "alice"))
+                     (k/add-member (k/member "bob"))
+                     (k/add-channel (k/channel "secret" {:kaisha/visibility :private
+                                                         :kaisha/members #{"alice"}})))
+            non-member-post (k/post base "secret" (k/message "m" {:kaisha/author "bob"
+                                                                   :kaisha/at "2026-07-07T00:00:00Z"}))
+            member-post     (k/post base "secret" (k/message "m" {:kaisha/author "alice"
+                                                                   :kaisha/at "2026-07-07T00:00:00Z"}))]
+        (is (contains? (codes non-member-post) :message/author-not-channel-member))
+        (is (not (contains? (codes member-post) :message/author-not-channel-member))
+            "a private channel's own member posting is not flagged")))))
 
 (deftest seed-space-is-valid
   (is (v/valid? (k/seed-space))))
