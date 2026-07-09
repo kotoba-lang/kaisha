@@ -49,7 +49,18 @@
            (get-in (k/message-by-id sp "general" "m-1") [:kaisha/reactions "+1"])))
     (testing "unread = top-level messages after the marker"
       (is (= ["m-2"] (map :kaisha/id (k/unread sp "rin" "general"))))
-      (is (= ["m-1" "m-2"] (map :kaisha/id (k/unread sp "jun" "general")))))))
+      (is (= ["m-1" "m-2"] (map :kaisha/id (k/unread sp "jun" "general")))))
+    (testing "a marker pointing at a thread reply (m-3, a reply to m-1, not
+              top-level) must fail open to everything unread -- NOT silently
+              report nothing. mark-read never validates msg-id is top-level,
+              and messages-in-order filters replies out, so drop-while would
+              otherwise consume the whole top-level sequence looking for a
+              match that can never appear, leaving `rest` on an empty seq"
+      (let [sp2 (k/mark-read sp "jun" "general" "m-3")]
+        (is (= ["m-1" "m-2"] (map :kaisha/id (k/unread sp2 "jun" "general"))))))
+    (testing "a marker pointing at a nonexistent id also fails open"
+      (let [sp2 (k/mark-read sp "jun" "general" "does-not-exist")]
+        (is (= ["m-1" "m-2"] (map :kaisha/id (k/unread sp2 "jun" "general"))))))))
 
 (deftest validation-catches-defects
   (let [codes (fn [sp] (set (map :kaisha/code (v/problems sp))))]

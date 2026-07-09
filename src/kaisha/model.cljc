@@ -121,11 +121,19 @@
   (assoc-in sp [:kaisha/read member-id channel-id] msg-id))
 
 (defn unread
-  "Top-level messages after the member's read marker, oldest first."
+  "Top-level messages after the member's read marker, oldest first. If the
+  marker doesn't match any top-level message (e.g. it points at a thread
+  reply -- mark-read never validates that msg-id is top-level -- or the
+  marked message was since deleted/moved), fails open and treats
+  everything as unread rather than silently reporting nothing: with
+  drop-while finding no match, it would otherwise consume the entire
+  sequence and `rest` on the resulting empty seq stays empty, hiding
+  genuinely unread messages. Under-reporting unread is a worse failure
+  mode than over-reporting."
   [sp member-id channel-id]
   (let [marker (get-in sp [:kaisha/read member-id channel-id])
         msgs (messages-in-order sp channel-id)]
-    (if (nil? marker)
+    (if (or (nil? marker) (not-any? #(= marker (:kaisha/id %)) msgs))
       msgs
       (->> msgs
            (drop-while #(not= marker (:kaisha/id %)))
