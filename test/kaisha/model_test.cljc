@@ -100,5 +100,45 @@
         (is (not (contains? (codes member-post) :message/author-not-channel-member))
             "a private channel's own member posting is not flagged")))))
 
+(deftest reactions-can-be-withdrawn
+  (let [sp (-> (fixture-space)
+               (k/react "general" "m-1" "+1" "rin")
+               (k/react "general" "m-1" "+1" "jun"))
+        one-left (k/unreact sp "general" "m-1" "+1" "rin")
+        none-left (k/unreact one-left "general" "m-1" "+1" "jun")]
+    (is (= #{"jun"} (get-in (k/message-by-id one-left "general" "m-1")
+                            [:kaisha/reactions "+1"])))
+    (testing "the emoji key is dropped once the last reactor leaves -- an
+              empty reactor set still renders as a zero-count badge"
+      (is (= {} (:kaisha/reactions (k/message-by-id none-left "general" "m-1")))))
+    (testing "withdrawing a reaction that was never given is a no-op"
+      (is (= sp (k/unreact sp "general" "m-1" "🎉" "rin"))))))
+
+(deftest declared-channel-and-message-fields-are-reachable
+  (let [sp (fixture-space)]
+    (testing "topic"
+      (is (= "deploys" (:kaisha/topic (k/channel-by-id (k/set-topic sp "general" "deploys")
+                                                       "general")))))
+    (testing "edit stamps :kaisha/edited-at and replaces the body"
+      (let [edited (k/edit sp "general" "m-1" "morning @rin (fixed)" "2026-07-07T09:05:00Z")
+            msg (k/message-by-id edited "general" "m-1")]
+        (is (= "morning @rin (fixed)" (:kaisha/body msg)))
+        (is (= "2026-07-07T09:05:00Z" (:kaisha/edited-at msg)))))
+    (testing "archive is reversible and never hides messages"
+      (let [archived (k/archive sp "general")]
+        (is (:kaisha/archived? (k/channel-by-id archived "general")))
+        (is (= ["m-1" "m-2"] (map :kaisha/id (k/messages-in-order archived "general")))
+            "an archived channel stays readable")
+        (is (= ["ops"] (map :kaisha/id (k/active-channels archived "jun"))))
+        (is (= ["general" "ops"] (map :kaisha/id (k/visible-channels archived "jun")))
+            "archived is a default-view narrowing, not an access rule")
+        (is (not (:kaisha/archived? (k/channel-by-id (k/unarchive archived "general")
+                                                     "general"))))))
+    (testing "every setter is a no-op on an unknown id rather than creating a phantom"
+      (is (= sp (k/set-topic sp "nope" "x")))
+      (is (= sp (k/archive sp "nope")))
+      (is (= sp (k/unarchive sp "nope")))
+      (is (= sp (k/edit sp "general" "no-such-message" "x" "2026-07-07T00:00:00Z"))))))
+
 (deftest seed-space-is-valid
   (is (v/valid? (k/seed-space))))

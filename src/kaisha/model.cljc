@@ -78,6 +78,47 @@
   (update-in sp [:kaisha/channels channel-id :kaisha/messages msg-id :kaisha/reactions emoji]
              (fnil conj #{}) member-id))
 
+(defn unreact
+  "Withdraw `member-id`'s `emoji` reaction. Drops the emoji key entirely
+  once the last reactor leaves, so a message never carries
+  `{\"+1\" #{}}` -- an empty reactor set still renders as a visible
+  zero-count badge in every host that iterates the reactions map."
+  [sp channel-id msg-id emoji member-id]
+  (let [path [:kaisha/channels channel-id :kaisha/messages msg-id :kaisha/reactions]
+        remaining (disj (get-in sp (conj path emoji) #{}) member-id)]
+    (if (seq remaining)
+      (assoc-in sp (conj path emoji) remaining)
+      (update-in sp path dissoc emoji))))
+
+(defn edit
+  "Replace a message body and stamp `:kaisha/edited-at`. The `at` argument
+  is the host's clock -- this model never reads a clock itself, the same
+  reason `message` takes `:kaisha/at` from its caller."
+  [sp channel-id msg-id body at]
+  (if (message-by-id sp channel-id msg-id)
+    (update-in sp [:kaisha/channels channel-id :kaisha/messages msg-id]
+               assoc :kaisha/body body :kaisha/edited-at at)
+    sp))
+
+(defn set-topic [sp channel-id topic]
+  (if (channel-by-id sp channel-id)
+    (assoc-in sp [:kaisha/channels channel-id :kaisha/topic] topic)
+    sp))
+
+(defn archive
+  "Close a channel to new activity. Archiving is reversible and never
+  deletes messages -- `messages-in-order`/`thread` keep working, so an
+  archived channel stays readable exactly as Slack/Teams leave it."
+  [sp channel-id]
+  (if (channel-by-id sp channel-id)
+    (assoc-in sp [:kaisha/channels channel-id :kaisha/archived?] true)
+    sp))
+
+(defn unarchive [sp channel-id]
+  (if (channel-by-id sp channel-id)
+    (assoc-in sp [:kaisha/channels channel-id :kaisha/archived?] false)
+    sp))
+
 (defn messages-in-order
   "Top-level messages of a channel (thread replies excluded), oldest first."
   [sp channel-id]
@@ -116,6 +157,13 @@
                     (contains? (:kaisha/members %) member-id)))
        (sort-by :kaisha/id)
        vec))
+
+(defn active-channels
+  "`visible-channels` minus the archived ones -- the default sidebar list.
+  Archived channels stay visible and readable through `visible-channels`;
+  this is the narrower view a host shows by default, not an access rule."
+  [sp member-id]
+  (vec (remove :kaisha/archived? (visible-channels sp member-id))))
 
 (defn mark-read [sp member-id channel-id msg-id]
   (assoc-in sp [:kaisha/read member-id channel-id] msg-id))
