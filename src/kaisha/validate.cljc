@@ -35,8 +35,35 @@
       (conj (problem :error :message/nested-thread (:kaisha/id msg)
                      "thread parent must be a top-level message")))))
 
+(defn dm-problems
+  "Invariants a DM has and an ordinary channel does not.
+
+  The id check is the load-bearing one. A DM whose id is not `dm-id` of its
+  own members is unreachable from `dm-with`, so both participants would open a
+  SECOND conversation and the first one's history would sit there being
+  written to by nobody — the exact split-history failure the derived id exists
+  to prevent. Hand-built values, migrations and older data are how such a
+  channel gets in, which is why it is checked here rather than assumed."
+  [ch]
+  (let [ms (:kaisha/members ch)]
+    (cond-> []
+      (not (<= 1 (count ms) 2))
+      (conj (problem :error :dm/wrong-member-count (:kaisha/id ch)
+                     "a DM has exactly two members (or one, for a note to self)"))
+
+      (and (<= 1 (count ms) 2)
+           (not= (:kaisha/id ch) (apply model/dm-id (if (= 1 (count ms))
+                                                      [(first ms) (first ms)]
+                                                      (vec ms)))))
+      (conj (problem :error :dm/id-mismatch (:kaisha/id ch)
+                     "a DM's id must be dm-id of its members, or it is unreachable"))
+
+      (not= :private (:kaisha/visibility ch))
+      (conj (problem :error :dm/not-private (:kaisha/id ch)
+                     "a DM is private")))))
+
 (defn channel-problems [sp ch]
-  (let [own (cond-> []
+  (let [own (cond-> (if (model/dm? ch) (dm-problems ch) [])
               (and (= :private (:kaisha/visibility ch))
                    (empty? (:kaisha/members ch)))
               (conj (problem :error :channel/private-without-members (:kaisha/id ch)

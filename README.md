@@ -48,6 +48,40 @@ Semantics follow Slack: threads are one level deep (a reply's parent must be a
 top-level message), private channels are visible to their members only, read
 markers are per member per channel.
 
+## Direct messages
+
+```clojure
+(-> sp (k/open-dm "jun" "rin"))            ;; idempotent
+(k/dm-with sp "rin" "jun")                 ;; the same channel, from either side
+(k/dms-of sp "jun")                        ;; their conversations
+(k/dm-counterpart (k/dm-with sp "jun" "rin") "jun")  ;; => "rin"
+```
+
+A DM is a channel with `:kaisha/kind :dm`, `:private` visibility and two
+members — not a separate collection, so threads, reactions, mentions, read
+markers and validation all apply unchanged.
+
+**Its id is derived, not allocated, and that is the whole design.** If each side
+allocated a fresh id when it opened a conversation, two people messaging each
+other at the same moment would create two DM channels for the same pair, with
+the history split between them and nothing detecting it: each client would show
+a conversation that looks complete and is missing half the messages. `dm-id`
+makes that unrepresentable — both sides compute the same id without
+coordinating, `open-dm` is idempotent, and `kaisha.validate` rejects a DM whose
+id is not `dm-id` of its own members (`:dm/id-mismatch`), because such a channel
+is unreachable from `dm-with` and would be written to by nobody.
+
+The id is length-prefixed (`dm:3:jun:rin`) rather than separator-joined:
+kaisha does not constrain the character set of a member id, and a plain
+`dm:a|b` merges `["x|y" "z"]` with `["x" "y|z"]` into one channel.
+
+`join` and `leave` are refused on a DM — its id describes exactly who is in it,
+so a third member would make the id a lie while the original two kept resolving
+to it. `active-channels` excludes DMs (they belong in their own list, addressed
+by who they are with); `visible-channels` still returns them.
+
+A note-to-self (`open-dm "jun" "jun"`) is a valid one-member DM, not a defect.
+
 `kaisha.validate/problems` returns `{:kaisha/severity :kaisha/code ...}` maps
 for structural defects (unknown author, orphan reply, nested thread, private
 channel without members); `valid?` is false on any `:error`.
@@ -55,8 +89,13 @@ channel without members); `valid?` is false on any `:error`.
 ## Test
 
 ```bash
-clojure -M:test
+clojure -M:test                              # JVM
+nbb --classpath "src:test" run-tests.cljs    # ClojureScript
 ```
+
+Both, always. `kaisha.model` runs in a Cloudflare Worker in production
+(`cloud-itonami.edge.chat-store`), so ClojureScript is a real runtime here and
+a JVM-only suite proves less than it appears to.
 
 ## Scope and follow-ups
 
