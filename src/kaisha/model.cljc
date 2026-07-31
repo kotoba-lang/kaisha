@@ -27,6 +27,7 @@
   ([id] (channel id {}))
   ([id attrs]
    (merge {:kaisha/id id
+           :kaisha/kind :channel
            :kaisha/name id
            :kaisha/topic nil
            :kaisha/visibility :public
@@ -47,6 +48,67 @@
            :kaisha/edited-at nil}
           attrs)))
 
+;; ---------------------------------------------------------------------------
+;; Direct messages
+;;
+;; A DM is a channel with `:kaisha/kind :dm`, `:private` visibility and exactly
+;; two members. It is not a separate collection: threads, reactions, read
+;; markers, mentions and validation all apply unchanged, and a host that can
+;; render a private channel can render a DM.
+;;
+;; THE ID IS DERIVED, NOT ALLOCATED. That is the whole design. If each side
+;; allocated a fresh id when it opened a conversation, two people messaging each
+;; other at the same time would create two DM channels for the same pair, with
+;; the history split between them and nothing anywhere detecting it — each
+;; client would show a conversation that looks complete and is missing half the
+;; messages. Deriving the id from the (sorted) pair makes that state
+;; unrepresentable: both sides compute the same id without coordinating, and
+;; `open-dm` is idempotent.
+;; ---------------------------------------------------------------------------
+
+(defn dm-id
+  "The canonical channel id for the conversation between `a` and `b`.
+
+  Length-prefixed rather than separator-joined. A plain `\"dm:a|b\"` collides as
+  soon as a member id contains the separator — `[\"x|y\" \"z\"]` and
+  `[\"x\" \"y|z\"]` both render `dm:x|y|z`, silently merging two different
+  people's conversations into one channel. kaisha does not constrain the
+  character set of a member id, so the encoding has to be unambiguous for any
+  content."
+  [a b]
+  (let [[x y] (sort [(str a) (str b)])]
+    (str "dm:" (count x) ":" x ":" y)))
+
+(defn dm
+  "Construct a DM channel between `a` and `b`.
+
+  Always private, always exactly these two members, and its id is `dm-id`.
+  `attrs` may carry `:kaisha/topic` and the like, but not membership or
+  visibility — those are what make it a DM."
+  ([a b] (dm a b {}))
+  ([a b attrs]
+   (merge (channel (dm-id a b)
+                   {:kaisha/kind :dm
+                    :kaisha/name (dm-id a b)
+                    :kaisha/visibility :private
+                    ;; `(into #{} [a b])`, not `#{a b}`: a set literal with two
+                    ;; equal elements is a reader-level duplicate-key error, so
+                    ;; a note-to-self DM would throw at construction rather than
+                    ;; collapsing to one member.
+                    :kaisha/members (into #{} [a b])})
+          (dissoc attrs :kaisha/members :kaisha/visibility :kaisha/kind :kaisha/id))))
+
+(defn dm? [ch] (= :dm (:kaisha/kind ch)))
+
+(defn self-dm?
+  "True when both sides of a DM are the same member — a note-to-self.
+
+  Allowed (a private scratch channel is a real use), but named so callers can
+  tell it apart from a two-person conversation instead of treating a
+  one-member DM as malformed."
+  [ch]
+  (and (dm? ch) (= 1 (count (:kaisha/members ch)))))
+
 (defn add-member [sp m]
   (assoc-in sp [:kaisha/members (:kaisha/id m)] m))
 
@@ -59,11 +121,65 @@
 (defn channel-by-id [sp id]
   (get-in sp [:kaisha/channels id]))
 
-(defn join [sp channel-id member-id]
-  (update-in sp [:kaisha/channels channel-id :kaisha/members] (fnil conj #{}) member-id))
+(defn open-dm
+  "Ensure a DM between `a` and `b` exists, and return the space.
 
-(defn leave [sp channel-id member-id]
-  (update-in sp [:kaisha/channels channel-id :kaisha/members] disj member-id))
+  Idempotent: opening an existing conversation returns it untouched rather
+  than replacing it with an empty one. Both sides calling this concurrently
+  converge on the same channel because `dm-id` is derived."
+  ([sp a b] (open-dm sp a b {}))
+  ([sp a b attrs]
+   (let [id (dm-id a b)]
+     (if (channel-by-id sp id)
+       sp
+       (add-channel sp (dm a b attrs))))))
+
+(defn dm-with
+  "The DM channel between `me` and `other`, or nil."
+  [sp me other]
+  (channel-by-id sp (dm-id me other)))
+
+(defn dms-of
+  "Every DM `member-id` participates in, oldest id first.
+
+  Separate from the channel list because a DM is addressed by *who* it is
+  with, not by a name — a sidebar that mixes them shows the derived id as a
+  channel name."
+  [sp member-id]
+  (->> (vals (:kaisha/channels sp))
+       (filter dm?)
+       (filter #(contains? (:kaisha/members %) member-id))
+       (sort-by :kaisha/id)
+       vec))
+
+(defn dm-counterpart
+  "The other member of a DM, from `member-id`'s point of view. For a
+  note-to-self DM that is `member-id` itself."
+  [ch member-id]
+  (or (first (disj (:kaisha/members ch) member-id)) member-id))
+
+(defn join
+  "Add `member-id` to a channel.
+
+  Refused for a DM: its membership is fixed at creation and its id is derived
+  from exactly that pair, so adding a third person would produce a channel
+  whose id no longer describes who is in it — and the two original members
+  would keep resolving to it via `dm-id` without knowing someone else is
+  reading. Use `open-dm` for a different pair, or a private channel for a
+  group."
+  [sp channel-id member-id]
+  (if (dm? (channel-by-id sp channel-id))
+    sp
+    (update-in sp [:kaisha/channels channel-id :kaisha/members] (fnil conj #{}) member-id)))
+
+(defn leave
+  "Remove `member-id` from a channel. Refused for a DM, for the same reason
+  `join` is: a one-sided DM is not a state either participant can be shown
+  coherently."
+  [sp channel-id member-id]
+  (if (dm? (channel-by-id sp channel-id))
+    sp
+    (update-in sp [:kaisha/channels channel-id :kaisha/members] disj member-id)))
 
 (defn post [sp channel-id msg]
   (assoc-in sp [:kaisha/channels channel-id :kaisha/messages (:kaisha/id msg)] msg))
@@ -161,9 +277,14 @@
 (defn active-channels
   "`visible-channels` minus the archived ones -- the default sidebar list.
   Archived channels stay visible and readable through `visible-channels`;
-  this is the narrower view a host shows by default, not an access rule."
+  this is the narrower view a host shows by default, not an access rule.
+
+  DMs are excluded — they belong in their own list (`dms-of`), addressed by
+  who they are with rather than by a name. `visible-channels` still returns
+  them, so nothing that needs the complete set loses anything."
   [sp member-id]
-  (vec (remove :kaisha/archived? (visible-channels sp member-id))))
+  (vec (remove #(or (:kaisha/archived? %) (dm? %))
+               (visible-channels sp member-id))))
 
 (defn mark-read [sp member-id channel-id msg-id]
   (assoc-in sp [:kaisha/read member-id channel-id] msg-id))

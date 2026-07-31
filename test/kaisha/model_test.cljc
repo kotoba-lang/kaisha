@@ -142,3 +142,112 @@
 
 (deftest seed-space-is-valid
   (is (v/valid? (k/seed-space))))
+
+;; ---------------------------------------------------------------------------
+;; Direct messages
+;; ---------------------------------------------------------------------------
+
+(defn- dm-space []
+  (-> (k/space "gftd")
+      (k/add-member (k/member "jun"))
+      (k/add-member (k/member "rin"))
+      (k/add-member (k/member "kai"))
+      (k/add-channel (k/channel "general"))))
+
+(deftest dm-id-is-order-independent
+  (testing "both sides compute the same id without coordinating"
+    (is (= (k/dm-id "jun" "rin") (k/dm-id "rin" "jun")))))
+
+(deftest dm-id-cannot-collide-across-pairs
+  (testing "a separator-joined id would merge different conversations"
+    ;; "x|y" + "z"  and  "x" + "y|z"  both render "dm:x|y|z" under a naive
+    ;; join; length-prefixing keeps them distinct.
+    (is (not= (k/dm-id "x|y" "z") (k/dm-id "x" "y|z")))
+    (is (not= (k/dm-id "a" "bc") (k/dm-id "ab" "c")))))
+
+(deftest opening-a-dm-is-idempotent
+  (let [sp (-> (dm-space) (k/open-dm "jun" "rin"))
+        ch (k/dm-with sp "jun" "rin")]
+    (is (some? ch))
+    (is (k/dm? ch))
+    (is (= :private (:kaisha/visibility ch)))
+    (is (= #{"jun" "rin"} (:kaisha/members ch)))
+    (testing "and the other side resolves the same channel"
+      (is (= ch (k/dm-with sp "rin" "jun"))))
+    (testing "re-opening does not replace the conversation"
+      (let [posted (k/post sp (:kaisha/id ch)
+                           (k/message "m-1" {:kaisha/author "jun"
+                                             :kaisha/body "hi"
+                                             :kaisha/at "2026-07-31T09:00:00Z"}))
+            again (k/open-dm posted "rin" "jun")]
+        (is (= 1 (count (:kaisha/messages (k/dm-with again "jun" "rin"))))
+            "an idempotent open must not blank the history")))))
+
+(deftest a-dm-is-invisible-to-everyone-else
+  (let [sp (-> (dm-space) (k/open-dm "jun" "rin"))]
+    (is (some? (k/dm-with sp "jun" "rin")))
+    (is (empty? (k/dms-of sp "kai")))
+    (is (not-any? k/dm? (k/visible-channels sp "kai"))
+        "a third party must not even see that the conversation exists")
+    (is (= 1 (count (k/dms-of sp "jun"))))
+    (is (= 1 (count (k/dms-of sp "rin"))))))
+
+(deftest dms-are-not-in-the-channel-sidebar
+  (let [sp (-> (dm-space) (k/open-dm "jun" "rin"))]
+    (is (= ["general"] (mapv :kaisha/id (k/active-channels sp "jun")))
+        "a derived id has no business appearing as a channel name")
+    (testing "but the complete view still has them"
+      (is (some k/dm? (k/visible-channels sp "jun"))))))
+
+(deftest membership-of-a-dm-is-fixed
+  (let [sp (-> (dm-space) (k/open-dm "jun" "rin"))
+        id (k/dm-id "jun" "rin")]
+    (testing "a third member cannot be added — the id would stop describing who is in it"
+      (is (= #{"jun" "rin"} (:kaisha/members (k/channel-by-id (k/join sp id "kai") id)))))
+    (testing "and neither side can leave"
+      (is (= #{"jun" "rin"} (:kaisha/members (k/channel-by-id (k/leave sp id "rin") id)))))
+    (testing "while an ordinary channel is unaffected"
+      (is (contains? (:kaisha/members (k/channel-by-id (k/join sp "general" "kai") "general"))
+                     "kai")))))
+
+(deftest dm-counterpart-is-the-other-person
+  (let [sp (-> (dm-space) (k/open-dm "jun" "rin"))
+        ch (k/dm-with sp "jun" "rin")]
+    (is (= "rin" (k/dm-counterpart ch "jun")))
+    (is (= "jun" (k/dm-counterpart ch "rin")))))
+
+(deftest a-note-to-self-is-allowed-and-named
+  (let [sp (-> (dm-space) (k/open-dm "jun" "jun"))
+        ch (k/dm-with sp "jun" "jun")]
+    (is (k/self-dm? ch))
+    (is (= #{"jun"} (:kaisha/members ch)))
+    (is (= "jun" (k/dm-counterpart ch "jun")))
+    (is (v/valid? sp) "a one-member DM is a scratch channel, not a defect")))
+
+(deftest a-dm-message-from-a-non-participant-is-an-error
+  (let [sp (-> (dm-space)
+               (k/open-dm "jun" "rin")
+               (k/post (k/dm-id "jun" "rin")
+                       (k/message "m-1" {:kaisha/author "kai"
+                                         :kaisha/body "listening in"
+                                         :kaisha/at "2026-07-31T09:00:00Z"})))]
+    (is (not (v/valid? sp)))
+    (is (some #(= :message/author-not-channel-member (:kaisha/code %)) (v/problems sp)))))
+
+(deftest validate-catches-an-unreachable-dm
+  (testing "a DM whose id is not dm-id of its members would split the history"
+    (let [broken (-> (dm-space)
+                     (k/add-channel (assoc (k/dm "jun" "rin") :kaisha/id "dm-legacy-7")))]
+      (is (not (v/valid? broken)))
+      (is (some #(= :dm/id-mismatch (:kaisha/code %)) (v/problems broken))
+          "both participants would open a second conversation and never see this one")))
+  (testing "a DM with three members"
+    (let [broken (-> (dm-space)
+                     (k/add-channel (assoc (k/dm "jun" "rin")
+                                           :kaisha/members #{"jun" "rin" "kai"})))]
+      (is (some #(= :dm/wrong-member-count (:kaisha/code %)) (v/problems broken)))))
+  (testing "a DM that is not private"
+    (let [broken (-> (dm-space)
+                     (k/add-channel (assoc (k/dm "jun" "rin")
+                                           :kaisha/visibility :public)))]
+      (is (some #(= :dm/not-private (:kaisha/code %)) (v/problems broken))))))
