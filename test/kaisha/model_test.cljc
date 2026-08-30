@@ -4,8 +4,8 @@
             [kaisha.validate :as v]))
 
 (defn fixture-space []
-  (-> (k/space "gftd")
-      (k/add-member (k/member "jun" {:kaisha/display-name "Jun Kawasaki"}))
+  (-> (k/space "acme")
+      (k/add-member (k/member "jun" {:kaisha/display-name "Jun"}))
       (k/add-member (k/member "rin"))
       (k/add-channel (k/channel "general"))
       (k/add-channel (k/channel "ops" {:kaisha/visibility :private}))
@@ -148,7 +148,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- dm-space []
-  (-> (k/space "gftd")
+  (-> (k/space "acme")
       (k/add-member (k/member "jun"))
       (k/add-member (k/member "rin"))
       (k/add-member (k/member "kai"))
