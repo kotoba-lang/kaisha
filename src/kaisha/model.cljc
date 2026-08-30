@@ -310,8 +310,8 @@
            vec))))
 
 (defn seed-space []
-  (-> (space "gftd" {:kaisha/name "GFTD"})
-      (add-member (member "jun" {:kaisha/display-name "Jun Kawasaki"}))
+  (-> (space "acme" {:kaisha/name "Acme"})
+      (add-member (member "jun" {:kaisha/display-name "Jun"}))
       (add-channel (channel "general" {:kaisha/topic "company-wide announcements"}))
       (join "general" "jun")
       (post "general" (message "m-1" {:kaisha/author "jun"

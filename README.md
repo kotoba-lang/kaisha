@@ -1,10 +1,10 @@
 # kaisha 会社
 
-Portable CLJC model for the GFTD workspace **communication space** (Slack/Teams
+Portable CLJC model for an EDN-native **communication space** (Slack/Teams
 相当): one space per company, channels, threaded messages, mentions, reactions,
 and read markers — as one EDN-native graph.
 
-Sibling of the other workspace surfaces:
+Sibling of the other kotoba-lang surfaces:
 
 - `kotoba-lang/slides` — decks, docs, drive, sheets
 - `kotoba-lang/calendar` — events, attendees
@@ -16,16 +16,13 @@ apps, persist it in Datomic/kotoba (append-only datoms; CRDT via
 Identity is intended to be kotoba CACAO `did:key` (the `:kaisha/did` slot on
 members); nothing in the model requires it.
 
-> Not to be confused with `gftdcojp/ai-gftd-kaisya` (different org, different
-> spelling, different product).
-
 ## Model
 
 ```clojure
 (require '[kaisha.model :as k])
 
 (def sp
-  (-> (k/space "gftd")
+  (-> (k/space "acme")
       (k/add-member (k/member "jun"))
       (k/add-member (k/member "rin"))
       (k/add-channel (k/channel "general"))
