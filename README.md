@@ -87,7 +87,7 @@ channel without members); `valid?` is false on any `:error`.
 
 ```bash
 clojure -M:test                              # JVM
-nbb --classpath "src:test" run-tests.cljs    # ClojureScript
+nbb --classpath "src:test" run-tests.cljk    # ClojureScript
 ```
 
 Both, always. `kaisha.model` runs in a Cloudflare Worker in production

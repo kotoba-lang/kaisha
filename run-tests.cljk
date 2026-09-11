@@ -12,7 +12,7 @@
 ;; `90-docs/adr/2607300500` records two such traps found exactly this way.
 ;;
 ;; Run:
-;;   nbb --classpath "src:test" run-tests.cljs
+;;   nbb --classpath "src:test" run-tests.cljk
 
 (ns run-tests
   (:require [cljs.test :as t]
